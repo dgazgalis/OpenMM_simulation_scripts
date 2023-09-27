@@ -1,5 +1,5 @@
 """
-Steered MD simulation in OpenMM from an inital structure 
+Targted MD simulation in OpenMM from an inital structure 
 """
 from openmm.app import *
 from openmm import *
@@ -47,25 +47,24 @@ modeller_B = Modeller(pdb_state_B.topology, pdb_state_B.positions)
 modeller_A.addSolvent(forcefield, padding=1.2*nanometers)
 
 # Setup refrence positions for the systems using the solvent from state A and the state B protein. We assume that chain A is protein. 
-#modeller_A_solvent = deepcopy(modeller_A)
-#chains = [r for r in modeller_A_solvent.topology.chains()]
-#modeller_A_solvent.delete([chains[0]])
-#modeller_B.add(modeller_A_solvent.topology, modeller_A_solvent.positions)
+modeller_A_solvent = deepcopy(modeller_A)
+chains = [r for r in modeller_A_solvent.topology.chains()]
+modeller_A_solvent.delete([chains[0]])
+modeller_B.add(modeller_A_solvent.topology, modeller_A_solvent.positions)
 
 # System preperation to create simulation object, add backbone restraints, and pullign forces
 # Pulling forces are switched off for the initial equlibriations
 system = forcefield.createSystem(modeller_A.topology, nonbondedMethod=PME, nonbondedCutoff=1.0*nanometers, constraints=app.HBonds, rigidWater=True, ewaldErrorTolerance=0.0005)
 pos_res_sys = add_backbone_pos_res(system, modeller_A.positions, modeller_A.topology.atoms(), 100)
 
-pull_index = [atom.index for atom in modeller_A.topology.atoms() if atom.name in ['CA']]
-pull_force = CustomExternalForce("k_pull*periodicdistance(x, y, z, x_ref, y_ref, z_ref)^2")
-pull_force.addGlobalParameter("k_pull", 0.0)
-pull_force.addPerParticleParameter('x_ref')
-pull_force.addPerParticleParameter('y_ref')
-pull_force.addPerParticleParameter('z_ref')
-for i,j in zip(pull_index, modeller_B.positions):
-    x_ref, y_ref, z_ref = j[0], j[1], j[2] 
-    pull_force.addParticle(i,[x_ref, y_ref, z_ref])
+rmsd_cv = openmm.RMSDForce(modeller_B, pull_index)
+energy_expression = f"(spring_constant/2)*max(0, RMSD-RMSDmax)^2"
+# energy_expression = f"RMSD"
+pull_force = openmm.CustomCVForce(energy_expression)
+pull_force.addCollectiveVariable('RMSD', rmsd_cv)
+pull_force.addGlobalParameter('RMSDmax', 0.4)
+pull_force.addGlobalParameter("spring_constant", 0)
+pull_index = system.addForce(restraint_force)
 pull_sys = deepcopy(pos_res_sys)
 pull_sys.addForce(pull_force)
 
@@ -131,8 +130,8 @@ integrator = LangevinIntegrator(300*kelvin, 1/picosecond, 0.002*picoseconds)
 integrator.setConstraintTolerance(0.00001)
 
 # Zero out preious constraint that was placed on the backbone and set new simulation contexts 
-simulation.context.setParameter('k_res', 0.0)
-simulation.context.setParameter('k_pull', 10.0)
+simulation.context.setParameter('k_res', 0.0*kilocalories_per_mole/angstroms**2)
+simulation.context.setParameter('k_pull', 5.0*kilocalories_per_mole/angstroms**2)
 simulation.context.setPositions(positions)
 simulation.context.setVelocities(velocities)
 
